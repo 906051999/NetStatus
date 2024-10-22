@@ -37,23 +37,23 @@ export default function WebsiteStatus() {
   const handlePing = async (url) => {
     setLoading(prev => ({ ...prev, [url]: { local: true, server: true } }));
     setStatuses(prev => ({ ...prev, [url]: {} }));
-  
+
     try {
       const localResult = await pingWebsite(url, 'local');
       setStatuses(prev => ({ ...prev, [url]: { ...prev[url], local: localResult } }));
     } catch (error) {
-      console.error('Error pinging website locally:', error);
-      setStatuses(prev => ({ ...prev, [url]: { ...prev[url], local: { error: error.message } } }));
+      console.error('Error in local ping:', error);
+      setStatuses(prev => ({ ...prev, [url]: { ...prev[url], local: { error: 'Unexpected error' } } }));
     } finally {
       setLoading(prev => ({ ...prev, [url]: { ...prev[url], local: false } }));
     }
-  
+
     try {
       const serverResult = await pingWebsite(url, 'server');
       setStatuses(prev => ({ ...prev, [url]: { ...prev[url], server: serverResult } }));
     } catch (error) {
-      console.error('Error pinging website from server:', error);
-      setStatuses(prev => ({ ...prev, [url]: { ...prev[url], server: { error: error.message } } }));
+      console.error('Error in server ping:', error);
+      setStatuses(prev => ({ ...prev, [url]: { ...prev[url], server: { error: 'Unexpected error' } } }));
     } finally {
       setLoading(prev => ({ ...prev, [url]: { ...prev[url], server: false } }));
     }
@@ -168,7 +168,7 @@ function PingStatus({ type, loading, status }) {
     return <p className="text-gray-600 text-xs">{type}：<span className="text-gray-400">未测试</span></p>;
   }
   if (status.error) {
-    return <p className="text-red-500 text-xs">{type}：错误</p>;
+    return <p className="text-red-500 text-xs">{type}：{status.error}</p>;
   }
   return (
     <p className="text-xs">

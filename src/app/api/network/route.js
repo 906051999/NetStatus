@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import https from 'https';
 
-async function fetchWithTimeout(url, options = {}, timeout = 5000) {
+const TIMEOUT = 5000; // 5 秒超时
+
+async function fetchWithTimeout(url, options = {}) {
   return new Promise((resolve, reject) => {
     const req = https.get(url, options, (res) => {
       let data = '';
@@ -17,8 +19,8 @@ async function fetchWithTimeout(url, options = {}, timeout = 5000) {
       reject(error);
     });
 
-    req.setTimeout(timeout, () => {
-      req.abort();
+    req.setTimeout(TIMEOUT, () => {
+      req.destroy();
       reject(new Error('Request timed out'));
     });
   });
@@ -49,10 +51,10 @@ export async function GET(request) {
 
 async function getIpInfo() {
   const apis = [
-    { url: 'https://uapis.cn/api/myip.php', type: 'json' },
-    { url: 'https://api.ip.sb/ip', type: 'plain' },
-    { url: 'https://api.52vmy.cn/api/query/itad', type: 'json' },
-    { url: 'https://www.cloudflare.com/cdn-cgi/trace', type: 'plain' }
+    { name: 'UAPIS', url: 'https://uapis.cn/api/myip.php', type: 'json' },
+    { name: 'IP.SB', url: 'https://api.ip.sb/ip', type: 'plain' },
+    { name: '52VMY', url: 'https://api.52vmy.cn/api/query/itad', type: 'json' },
+    { name: 'Cloudflare', url: 'https://www.cloudflare.com/cdn-cgi/trace', type: 'plain' }
   ];
 
   const results = await Promise.all(apis.map(async (api) => {
@@ -60,13 +62,13 @@ async function getIpInfo() {
       const response = await fetchWithTimeout(api.url);
       if (api.type === 'json') {
         const data = JSON.parse(response.data);
-        return { ip: data.ip, info: formatInfo(data) };
+        return { source: api.name, ip: data.ip, info: formatInfo(data) };
       } else {
         const text = response.data;
         const ip = api.url.includes('cloudflare') ? text.match(/ip=(.*)/)[1] : text.trim();
         const { data: ipData } = await fetchWithTimeout(`https://api.52vmy.cn/api/query/itad?ip=${ip}`);
         const data = JSON.parse(ipData);
-        return { ip, info: formatInfo(data.data) };
+        return { source: api.name, ip, info: formatInfo(data.data) };
       }
     } catch (error) {
       console.error(`Error fetching from ${api.url}:`, error);
@@ -74,19 +76,34 @@ async function getIpInfo() {
     }
   }));
 
-  const validResults = results.filter(result => result && result.ip && result.info !== 'Information not available');
+  const validResults = results.filter(result => result && result.ip);
 
   if (validResults.length === 0) {
     return NextResponse.json({ error: 'Failed to fetch IP information' }, { status: 500 });
   }
 
-  const uniqueIps = [...new Set(validResults.map(result => result.ip))];
+  // 根据 IP 地址分组
+  const groupedByIP = validResults.reduce((acc, result) => {
+    if (!acc[result.ip]) {
+      acc[result.ip] = [];
+    }
+    acc[result.ip].push(result);
+    return acc;
+  }, {});
 
-  if (uniqueIps.length === 1) {
-    return NextResponse.json([validResults[0]]);
-  } else {
-    return NextResponse.json(validResults);
-  }
+  // 对于每个唯一的 IP 地址，只保留一个结果（优先选择有更多信息的结果）
+  const uniqueResults = Object.values(groupedByIP).map(group => 
+    group.reduce((best, current) => 
+      current.info.length > best.info.length ? current : best
+    )
+  );
+
+  return NextResponse.json(uniqueResults);
+}
+
+// 新增函数：格式化 IP 信息以便比较
+function formatInfoForComparison(info) {
+  return info.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 function formatInfo(data) {
@@ -98,17 +115,12 @@ function formatInfo(data) {
   return 'Information not available';
 }
 
-async function pingWebsite(url, type) {
+async function pingWebsite(url) {
   const startTime = Date.now();
   try {
     const response = await fetchWithTimeout(`https://${url}`);
     const endTime = Date.now();
     const latency = endTime - startTime;
-    
-    // 检查是否真的超时了
-    if (latency >= 10000) {
-      throw new Error('Request timed out');
-    }
     
     return NextResponse.json({
       url,
@@ -118,8 +130,8 @@ async function pingWebsite(url, type) {
   } catch (error) {
     return NextResponse.json({
       url,
-      error: error.message
-    }, { status: 504 }); // 使用 504 Gateway Timeout 状态码
+      error: error.message === 'Request timed out' ? 'Request timed out' : error.message || 'Request failed'
+    }, { status: 200 }); // 使用 200 状态码，让错误信息能够正常返回到前端
   }
 }
 

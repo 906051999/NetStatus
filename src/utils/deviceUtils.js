@@ -1,30 +1,37 @@
 import FingerprintJS from '@fingerprintjs/fingerprintjs';
 import UAParser from 'ua-parser-js';
 
-const fpPromise = FingerprintJS.load();
-const parser = new UAParser();
-
 export async function getDeviceInfo() {
-  const fp = await fpPromise;
-  const result = await fp.get();
-  const uaResult = parser.getResult();
+  if (typeof window === 'undefined') {
+    return { error: 'Cannot get device info on server side' };
+  }
 
-  const deviceInfo = {
-    fingerprint: result.visitorId,
-    type: getDeviceType(uaResult),
-    os: `${uaResult.os.name} ${uaResult.os.version}`,
-    browser: `${uaResult.browser.name} ${uaResult.browser.version}`,
-    model: uaResult.device.model || '未知',
-    vendor: uaResult.device.vendor || '未知',
-    ...getScreenInfo(),
-    battery: await getBatteryInfo(),
-    networkType: await getNetworkType(),
-    orientation: getOrientation(),
-    sensors: await getSensorData(),
-    components: result.components,
-  };
+  try {
+    const fpPromise = FingerprintJS.load();
+    const fp = await fpPromise;
+    const result = await fp.get();
+    const uaResult = new UAParser().getResult();
 
-  return deviceInfo;
+    const deviceInfo = {
+      fingerprint: result.visitorId,
+      type: getDeviceType(uaResult),
+      os: `${uaResult.os.name} ${uaResult.os.version}`,
+      browser: `${uaResult.browser.name} ${uaResult.browser.version}`,
+      model: uaResult.device.model || '未知',
+      vendor: uaResult.device.vendor || '未知',
+      ...getScreenInfo(),
+      battery: await getBatteryInfo(),
+      networkType: await getNetworkType(),
+      orientation: getOrientation(),
+      sensors: await getSensorData(),
+      components: result.components,
+    };
+
+    return deviceInfo;
+  } catch (error) {
+    console.error('Error getting device info:', error);
+    return { error: error.message };
+  }
 }
 
 function getDeviceType(uaResult) {

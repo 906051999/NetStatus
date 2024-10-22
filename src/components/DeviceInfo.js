@@ -9,6 +9,7 @@ export default function DeviceInfo() {
   const [deviceInfo, setDeviceInfo] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [isClient, setIsClient] = useState(false);
 
   const handleFetchDeviceInfo = async () => {
     setIsLoading(true);
@@ -25,7 +26,10 @@ export default function DeviceInfo() {
   };
 
   useEffect(() => {
-    handleFetchDeviceInfo();
+    setIsClient(true);
+    if (typeof window !== 'undefined') {
+      handleFetchDeviceInfo();
+    }
   }, []);
 
   const containerVariants = {
@@ -51,7 +55,7 @@ export default function DeviceInfo() {
           {error}
         </motion.p>
       )}
-      {!deviceInfo ? (
+      {!deviceInfo && isClient && (
         <motion.button
           variants={itemVariants}
           onClick={handleFetchDeviceInfo}
@@ -60,7 +64,8 @@ export default function DeviceInfo() {
         >
           {isLoading ? '获取中...' : '获取设备信息'}
         </motion.button>
-      ) : (
+      )}
+      {deviceInfo && (
         <motion.div variants={itemVariants} className="space-y-2">
           <div className="grid grid-cols-3 gap-1 sm:gap-2">
             <InfoItem label="设备指纹" value={deviceInfo.fingerprint} />

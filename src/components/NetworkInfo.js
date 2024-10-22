@@ -4,8 +4,9 @@ import { useState, useEffect } from 'react';
 import { getNetworkInfo } from '../utils/networkUtils';
 import { motion } from 'framer-motion';
 
-export default function NetworkInfo() {
+export default function NetworkInfo({ openModal }) {
   const [networkInfo, setNetworkInfo] = useState(null);
+  const [allResults, setAllResults] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -13,8 +14,9 @@ export default function NetworkInfo() {
     setIsLoading(true);
     setError(null);
     try {
-      const info = await getNetworkInfo();
-      setNetworkInfo(info);
+      const { finalResults, allResults } = await getNetworkInfo();
+      setNetworkInfo(finalResults);
+      setAllResults(allResults);
     } catch (err) {
       console.error('Failed to fetch network info:', err);
       setError(err.message);
@@ -44,7 +46,17 @@ export default function NetworkInfo() {
       variants={containerVariants}
       className="bg-white shadow-lg rounded-lg p-3 sm:p-4 mb-4"
     >
-      <h2 className="text-lg sm:text-xl font-bold text-gray-800 mb-2 sm:mb-3">网络信息</h2>
+      <div className="flex justify-between items-center mb-2 sm:mb-3">
+        <h2 className="text-lg sm:text-xl font-bold text-gray-800">网络信息</h2>
+        {allResults && (
+          <button
+            onClick={() => openModal(allResults)}
+            className="bg-green-500 hover:bg-green-700 text-white font-bold py-1 px-2 rounded text-xs sm:text-sm"
+          >
+            查看原始数据
+          </button>
+        )}
+      </div>
       {error && (
         <motion.p variants={itemVariants} className="text-red-500 mb-2 p-2 bg-red-100 rounded-lg text-xs sm:text-sm">
           错误：{error}
@@ -65,12 +77,13 @@ export default function NetworkInfo() {
               >
                 <p className="font-semibold text-blue-600 mb-1">IP: {info.ip}</p>
                 <p className="text-gray-700">{info.info}</p>
+                <p className="text-gray-500 mt-1">来源: {info.source}</p>
               </motion.div>
             ))}
           </div>
           {networkInfo.length > 1 && (
             <motion.p variants={itemVariants} className="mt-2 p-2 bg-yellow-100 rounded-lg text-yellow-700 text-xs sm:text-sm">
-              注意：检测到多个不同的 IP 地址。
+              注意：检测到多个不同的 IP 地址。这可能是由于使用了代理、VPN 或多网络接口。
             </motion.p>
           )}
           <motion.button
