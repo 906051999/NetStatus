@@ -1,4 +1,27 @@
+const API_TIMEOUT = 5000; // 5 秒超时
+
+export async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), API_TIMEOUT);
+  const response = await fetch(url, {
+    ...options,
+    signal: controller.signal
+  });
+  clearTimeout(id);
+  return response;
+}
+
 export async function getNetworkInfo() {
+  const [localResults, serverResults] = await Promise.all([
+    getLocalNetworkInfo(),
+    getServerNetworkInfo()
+  ]);
+
+  return { localResults, serverResults };
+}
+
+async function getLocalNetworkInfo() {
+  // 使用之前的 getNetworkInfo 逻辑
   const apis = [
     { name: 'UAPIS', url: '/api/uapis/myip.php', type: 'json' },
     { name: 'IP.SB', url: '/api/ip-sb/ip', type: 'plain' },
@@ -6,49 +29,33 @@ export async function getNetworkInfo() {
     { name: 'Cloudflare', url: '/api/cloudflare/cdn-cgi/trace', type: 'plain' }
   ];
 
-  const results = await Promise.all(apis.map(async (api) => {
-    try {
-      const response = await fetch(api.url);
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      let rawData;
-      if (api.type === 'json') {
-        rawData = await response.json();
-        return { 
-          source: api.name, 
-          ip: rawData.ip, 
-          info: formatInfo(rawData),
-          rawData: JSON.stringify(rawData, null, 2)
-        };
-      } else {
-        rawData = await response.text();
-        const ip = api.url.includes('cloudflare') ? rawData.match(/ip=(.*)/)[1] : rawData.trim();
-        const ipInfoResponse = await fetch(`/api/52vmy/query/itad?ip=${ip}`);
-        const ipInfoData = await ipInfoResponse.json();
-        return { 
-          source: api.name, 
-          ip, 
-          info: formatInfo(ipInfoData.data),
-          rawData: rawData
-        };
-      }
-    } catch (error) {
-      console.error(`Error fetching from ${api.url}:`, error);
-      return { source: api.name, error: error.message };
-    }
-  }));
+  const results = await Promise.all(apis.map(fetchApiData));
+  return processResults(results);
+}
 
+async function getServerNetworkInfo() {
+  try {
+    const response = await fetchWithTimeout('/api/network?action=getIpInfo');
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const result = await response.json();
+    return processResults([result]); // 将结果包装在数组中，以保持与之前逻辑的一致性
+  } catch (error) {
+    console.error('Error fetching server network info:', error);
+    return { finalResults: [], allResults: [] };
+  }
+}
+
+function processResults(results) {
   const validResults = results.filter(result => result && result.ip && result.info !== 'Information not available');
 
   if (validResults.length === 0) {
-    throw new Error('Failed to fetch IP information');
+    return { finalResults: [], allResults: results };
   }
 
-  // 对 IP 地址进行格式化和去重
   const uniqueIPs = [...new Set(validResults.map(result => formatIP(result.ip)))];
 
-  // 为每个唯一的 IP 地址选择一个结果
   const finalResults = uniqueIPs.map(ip => {
     const matchingResults = validResults.filter(result => formatIP(result.ip) === ip);
     return matchingResults.reduce((best, current) => 
@@ -59,8 +66,37 @@ export async function getNetworkInfo() {
   return { finalResults, allResults: results };
 }
 
+async function fetchApiData(api) {
+  try {
+    const response = await fetchWithTimeout(api.url);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    let rawData, ip, ipInfoData;
+    if (api.type === 'json') {
+      rawData = await response.json();
+      ip = rawData.ip;
+      ipInfoData = rawData;
+    } else {
+      rawData = await response.text();
+      ip = api.url.includes('cloudflare') ? rawData.match(/ip=(.*)/)[1] : rawData.trim();
+      const ipInfoResponse = await fetchWithTimeout(`/api/52vmy/query/itad?ip=${ip}`);
+      ipInfoData = await ipInfoResponse.json();
+    }
+    return { 
+      source: api.name, 
+      ip, 
+      info: formatInfo(api.type ===
+      'json' ? ipInfoData : ipInfoData.data),
+      rawData: api.type === 'json' ? JSON.stringify(rawData, null, 2) : rawData
+    };
+  } catch (error) {
+    console.error(`Error fetching from ${api.url}:`, error);
+    return { source: api.name, error: error.message };
+  }
+}
+
 function formatIP(ip) {
-  // 简单的 IP 格式化，去除空格并转为小写
   return ip.trim().toLowerCase();
 }
 
@@ -73,57 +109,59 @@ function formatInfo(data) {
   return 'Information not available';
 }
 
-const TIMEOUT = 5000; // 5 秒超时
-
 export async function pingWebsite(url, type) {
-  try {
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-    }, TIMEOUT);
+  if (type === 'local') {
+    return localPingWebsite(url);
+  } else if (type === 'server') {
+    return serverPingWebsite(url);
+  } else {
+    throw new Error('Invalid ping type');
+  }
+}
 
-    if (type === 'local') {
-      try {
-        const startTime = Date.now();
-        const response = await fetch(`https://${url}`, { 
-          mode: 'no-cors',
-          cache: 'no-cache',
-          credentials: 'omit',
-        });
-        clearTimeout(timer);
-        if (timedOut) {
-          return { error: 'Request timed out' };
-        }
-        const endTime = Date.now();
-        const latency = endTime - startTime;
-        return { status: 'OK', latency };
-      } catch (error) {
-        clearTimeout(timer);
-        console.error(`Error pinging ${url} locally:`, error);
-        if (error.message.includes('Failed to fetch')) {
-          return { error: 'Failed to connect' };
-        }
-        return { error: timedOut ? 'Request timed out' : error.message || 'Request failed' };
+async function localPingWebsite(url) {
+  return new Promise((resolve) => {
+    const startTime = performance.now();
+    const img = new Image();
+    
+    img.onload = img.onerror = () => {
+      const endTime = performance.now();
+      const latency = Math.round(endTime - startTime);
+      resolve({ status: 'Reachable', latency });
+    };
+    
+    img.src = `https://${url}/favicon.ico?t=${Date.now()}`;
+    
+    // 设置超时
+    setTimeout(() => {
+      if (!img.complete) {
+        img.src = '';
+        resolve({ error: 'Request timed out' });
       }
-    } else {
-      try {
-        const response = await fetch(`/api/network?action=ping&url=${encodeURIComponent(url)}&type=${type}`);
-        clearTimeout(timer);
-        if (timedOut) {
-          return { error: 'Request timed out' };
-        }
-        const data = await response.json();
-        console.log(`Ping result for ${url} (${type}):`, data);
-        return data;
-      } catch (error) {
-        clearTimeout(timer);
-        console.error(`Error pinging ${url} from server:`, error);
-        return { error: timedOut ? 'Request timed out' : error.message || 'Request failed' };
-      }
+    }, API_TIMEOUT);
+  });
+}
+
+async function serverPingWebsite(url) {
+  try {
+    const response = await fetchWithTimeout(`/api/network?action=ping&url=${encodeURIComponent(url)}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Accept': 'application/json',
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
+    const data = await response.json();
+    return data;
   } catch (error) {
-    console.error('Unexpected error in pingWebsite:', error);
-    return { error: 'Unexpected error occurred' };
+    if (error.name === 'AbortError') {
+      return { error: 'Request was aborted' };
+    }
+    return { error: error.message || 'Request failed' };
   }
 }
 
@@ -133,7 +171,6 @@ export async function getLocation() {
       navigator.geolocation.getCurrentPosition(
         async (position) => {
           const { latitude, longitude } = position.coords;
-          // 这里可以添加反向地理编码的 API 调用来获取地址
           resolve({ latitude, longitude });
         },
         (error) => {

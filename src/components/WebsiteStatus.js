@@ -17,7 +17,7 @@ const websites = [
   { name: 'YouTube', url: 'youtube.com' },
   { name: 'OpenAI', url: 'openai.com' },
   { name: 'Claude', url: 'anthropic.com' },
-  { name: 'Twitter', url: 'twitter.com' },
+  { name: 'X（Twitter）', url: 'x.com' },
   { name: 'Facebook', url: 'facebook.com' },
   { name: 'Amazon', url: 'amazon.com' },
   { name: 'Netflix', url: 'netflix.com' },
@@ -39,23 +39,23 @@ export default function WebsiteStatus() {
     setStatuses(prev => ({ ...prev, [url]: {} }));
 
     try {
-      const localResult = await pingWebsite(url, 'local');
-      setStatuses(prev => ({ ...prev, [url]: { ...prev[url], local: localResult } }));
+      const [localResult, serverResult] = await Promise.all([
+        pingWebsite(url, 'local'),
+        pingWebsite(url, 'server')
+      ]);
+      console.log(`Ping results for ${url}:`, { local: localResult, server: serverResult });
+      setStatuses(prev => ({ 
+        ...prev, 
+        [url]: { local: localResult, server: serverResult } 
+      }));
     } catch (error) {
-      console.error('Error in local ping:', error);
-      setStatuses(prev => ({ ...prev, [url]: { ...prev[url], local: { error: 'Unexpected error' } } }));
+      console.error('Error in ping:', error);
+      setStatuses(prev => ({ 
+        ...prev, 
+        [url]: { local: { error: 'Unexpected error' }, server: { error: 'Unexpected error' } } 
+      }));
     } finally {
-      setLoading(prev => ({ ...prev, [url]: { ...prev[url], local: false } }));
-    }
-
-    try {
-      const serverResult = await pingWebsite(url, 'server');
-      setStatuses(prev => ({ ...prev, [url]: { ...prev[url], server: serverResult } }));
-    } catch (error) {
-      console.error('Error in server ping:', error);
-      setStatuses(prev => ({ ...prev, [url]: { ...prev[url], server: { error: 'Unexpected error' } } }));
-    } finally {
-      setLoading(prev => ({ ...prev, [url]: { ...prev[url], server: false } }));
+      setLoading(prev => ({ ...prev, [url]: { local: false, server: false } }));
     }
   };
 
@@ -68,7 +68,15 @@ export default function WebsiteStatus() {
     try {
       await Promise.all(websites.map(async ({ url }) => {
         if (abortControllerRef.current.signal.aborted) return;
-        await handlePing(url);
+        try {
+          await handlePing(url);
+        } catch (error) {
+          console.error(`Error pinging ${url}:`, error);
+          setStatuses(prev => ({
+            ...prev,
+            [url]: { local: { error: 'Request failed' }, server: { error: 'Request failed' } }
+          }));
+        }
       }));
     } catch (error) {
       console.error('Error during ping all:', error);

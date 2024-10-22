@@ -1,109 +1,88 @@
 import { NextResponse } from 'next/server';
-import https from 'https';
+import fetch from 'node-fetch';
 
-const TIMEOUT = 5000; // 5 秒超时
-
-async function fetchWithTimeout(url, options = {}) {
-  return new Promise((resolve, reject) => {
-    const req = https.get(url, options, (res) => {
-      let data = '';
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-      res.on('end', () => {
-        resolve({ status: res.statusCode, data });
-      });
-    });
-
-    req.on('error', (error) => {
-      reject(error);
-    });
-
-    req.setTimeout(TIMEOUT, () => {
-      req.destroy();
-      reject(new Error('Request timed out'));
-    });
-  });
-}
+const TIMEOUT = 10000; // 10 秒超时
 
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const action = searchParams.get('action');
+  const url = searchParams.get('url');
+
+  if (action === 'ping') {
+    return handlePing(url);
+  } else if (action === 'getIpInfo') {
+    return handleGetIpInfo();
+  }
+
+  return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
+}
+
+async function handlePing(url) {
+  if (!url) {
+    return NextResponse.json({ error: 'Missing url parameter' }, { status: 400 });
+  }
 
   try {
-    switch (action) {
-      case 'ip':
-        return await getIpInfo();
-      case 'ping':
-        const url = searchParams.get('url');
-        const type = searchParams.get('type');
-        return await pingWebsite(url, type);
-      case 'location':
-        return await getLocation();
-      default:
-        return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
-    }
+    const result = await serverPingWebsite(url);
+    return NextResponse.json(result);
   } catch (error) {
-    console.error('API error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    console.error(`Error pinging ${url}:`, error);
+    return NextResponse.json({ error: error.message || 'Request failed' }, { status: 500 });
+  }
+}
+
+async function serverPingWebsite(url) {
+  const startTime = Date.now();
+  try {
+    const response = await fetch(`https://${url}`, {
+      method: 'HEAD',
+      timeout: TIMEOUT,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; PingBot/1.0;)',
+      },
+    });
+    const endTime = Date.now();
+    const latency = endTime - startTime;
+    return { status: response.status, latency };
+  } catch (error) {
+    if (error.type === 'request-timeout') {
+      throw new Error('Request timed out');
+    }
+    throw error;
+  }
+}
+
+async function handleGetIpInfo() {
+  try {
+    const result = await getIpInfo();
+    return NextResponse.json(result);
+  } catch (error) {
+    console.error('Error getting IP info:', error);
+    return NextResponse.json({ error: error.message || 'Failed to get IP info' }, { status: 500 });
   }
 }
 
 async function getIpInfo() {
-  const apis = [
-    { name: 'UAPIS', url: 'https://uapis.cn/api/myip.php', type: 'json' },
-    { name: 'IP.SB', url: 'https://api.ip.sb/ip', type: 'plain' },
-    { name: '52VMY', url: 'https://api.52vmy.cn/api/query/itad', type: 'json' },
-    { name: 'Cloudflare', url: 'https://www.cloudflare.com/cdn-cgi/trace', type: 'plain' }
-  ];
+  try {
+    // 使用 Cloudflare 获取 IP
+    const cfResponse = await fetch('https://www.cloudflare.com/cdn-cgi/trace', { timeout: TIMEOUT });
+    const cfText = await cfResponse.text();
+    const ip = cfText.match(/ip=(.*)/)[1].trim();
 
-  const results = await Promise.all(apis.map(async (api) => {
-    try {
-      const response = await fetchWithTimeout(api.url);
-      if (api.type === 'json') {
-        const data = JSON.parse(response.data);
-        return { source: api.name, ip: data.ip, info: formatInfo(data) };
-      } else {
-        const text = response.data;
-        const ip = api.url.includes('cloudflare') ? text.match(/ip=(.*)/)[1] : text.trim();
-        const { data: ipData } = await fetchWithTimeout(`https://api.52vmy.cn/api/query/itad?ip=${ip}`);
-        const data = JSON.parse(ipData);
-        return { source: api.name, ip, info: formatInfo(data.data) };
-      }
-    } catch (error) {
-      console.error(`Error fetching from ${api.url}:`, error);
-      return null;
-    }
-  }));
+    // 使用获取到的 IP 查询详细信息
+    const ipInfoResponse = await fetch(`https://api.52vmy.cn/api/query/itad?ip=${ip}`, { timeout: TIMEOUT });
+    const ipInfoData = await ipInfoResponse.json();
 
-  const validResults = results.filter(result => result && result.ip);
-
-  if (validResults.length === 0) {
-    return NextResponse.json({ error: 'Failed to fetch IP information' }, { status: 500 });
+    return {
+      source: 'Cloudflare + 52VMY',
+      ip: ip,
+      info: formatInfo(ipInfoData.data),
+      rawData: JSON.stringify({ cloudflare: cfText, ipInfo: ipInfoData }, null, 2)
+    };
+  } catch (error) {
+    console.error('Error fetching IP info:', error);
+    throw new Error('Failed to fetch IP information');
   }
-
-  // 根据 IP 地址分组
-  const groupedByIP = validResults.reduce((acc, result) => {
-    if (!acc[result.ip]) {
-      acc[result.ip] = [];
-    }
-    acc[result.ip].push(result);
-    return acc;
-  }, {});
-
-  // 对于每个唯一的 IP 地址，只保留一个结果（优先选择有更多信息的结果）
-  const uniqueResults = Object.values(groupedByIP).map(group => 
-    group.reduce((best, current) => 
-      current.info.length > best.info.length ? current : best
-    )
-  );
-
-  return NextResponse.json(uniqueResults);
-}
-
-// 新增函数：格式化 IP 信息以便比较
-function formatInfoForComparison(info) {
-  return info.toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 function formatInfo(data) {
@@ -113,26 +92,6 @@ function formatInfo(data) {
     return `${data.home} ${data.address}`;
   }
   return 'Information not available';
-}
-
-async function pingWebsite(url) {
-  const startTime = Date.now();
-  try {
-    const response = await fetchWithTimeout(`https://${url}`);
-    const endTime = Date.now();
-    const latency = endTime - startTime;
-    
-    return NextResponse.json({
-      url,
-      status: response.status,
-      latency: latency
-    });
-  } catch (error) {
-    return NextResponse.json({
-      url,
-      error: error.message === 'Request timed out' ? 'Request timed out' : error.message || 'Request failed'
-    }, { status: 200 }); // 使用 200 状态码，让错误信息能够正常返回到前端
-  }
 }
 
 async function getLocation() {

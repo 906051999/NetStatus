@@ -1,5 +1,6 @@
 import FingerprintJS from '@fingerprintjs/fingerprintjs';
 import UAParser from 'ua-parser-js';
+import { fetchWithTimeout } from './networkUtils';
 
 export async function getDeviceInfo() {
   if (typeof window === 'undefined') {
@@ -84,8 +85,16 @@ async function getNetworkType() {
       };
       return types[connection.effectiveType] || connection.effectiveType;
     }
+  } else {
+    try {
+      const response = await fetchWithTimeout('https://api.ipify.org?format=json');
+      const data = await response.json();
+      return `IP: ${data.ip}`;
+    } catch (error) {
+      console.error('Error fetching network type:', error);
+      return '未知';
+    }
   }
-  return '未知';
 }
 
 function getOrientation() {

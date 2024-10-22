@@ -3,8 +3,7 @@ const nextConfig = {
   async headers() {
     return [
       {
-        // 对所有路由应用这些头部
-        source: '/:path*',
+        source: '/api/:path*',
         headers: [
           { key: 'Access-Control-Allow-Credentials', value: 'true' },
           { key: 'Access-Control-Allow-Origin', value: '*' },
