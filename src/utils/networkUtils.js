@@ -6,18 +6,14 @@ export async function getNetworkInfo() {
   return response.json();
 }
 
-export async function pingWebsite(url) {
-  const localPing = await fetch(`/api/network?action=ping&url=${encodeURIComponent(url)}&type=local`);
-  const serverPing = await fetch(`/api/network?action=ping&url=${encodeURIComponent(url)}&type=server`);
-  
-  if (!localPing.ok || !serverPing.ok) {
-    throw new Error('Failed to ping website');
+export async function pingWebsite(url, type) {
+  const response = await fetch(`/api/network?action=ping&url=${encodeURIComponent(url)}&type=${type}`);
+  const data = await response.json();
+  console.log(`Ping result for ${url} (${type}):`, data);
+  if (!response.ok) {
+    throw new Error(data.error || 'Failed to ping website');
   }
-  
-  const localResult = await localPing.json();
-  const serverResult = await serverPing.json();
-  
-  return { local: localResult, server: serverResult };
+  return data;
 }
 
 export async function getLocation() {

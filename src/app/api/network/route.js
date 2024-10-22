@@ -1,18 +1,27 @@
 import { NextResponse } from 'next/server';
-import { exec } from 'child_process';
-import util from 'util';
-
-const execPromise = util.promisify(exec);
+import https from 'https';
 
 async function fetchWithTimeout(url, options = {}, timeout = 5000) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeout);
-  const response = await fetch(url, {
-    ...options,
-    signal: controller.signal
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+      res.on('end', () => {
+        resolve({ status: res.statusCode, data });
+      });
+    });
+
+    req.on('error', (error) => {
+      reject(error);
+    });
+
+    req.setTimeout(timeout, () => {
+      req.abort();
+      reject(new Error('Request timed out'));
+    });
   });
-  clearTimeout(id);
-  return response;
 }
 
 export async function GET(request) {
@@ -50,12 +59,13 @@ async function getIpInfo() {
     try {
       const response = await fetchWithTimeout(api.url);
       if (api.type === 'json') {
-        const data = await response.json();
+        const data = JSON.parse(response.data);
         return { ip: data.ip, info: formatInfo(data) };
       } else {
-        const text = await response.text();
+        const text = response.data;
         const ip = api.url.includes('cloudflare') ? text.match(/ip=(.*)/)[1] : text.trim();
-        const data = await (await fetch(`https://api.52vmy.cn/api/query/itad?ip=${ip}`)).json();
+        const { data: ipData } = await fetchWithTimeout(`https://api.52vmy.cn/api/query/itad?ip=${ip}`);
+        const data = JSON.parse(ipData);
         return { ip, info: formatInfo(data.data) };
       }
     } catch (error) {
@@ -73,10 +83,8 @@ async function getIpInfo() {
   const uniqueIps = [...new Set(validResults.map(result => result.ip))];
 
   if (uniqueIps.length === 1) {
-    // 所有 API 返回相同的 IP，只返回一个结果
     return NextResponse.json([validResults[0]]);
   } else {
-    // IP 不一致，返回所有有效结果
     return NextResponse.json(validResults);
   }
 }
@@ -91,68 +99,30 @@ function formatInfo(data) {
 }
 
 async function pingWebsite(url, type) {
-  if (type === 'local') {
-    return await localPing(url);
-  } else if (type === 'server') {
-    return await serverPing(url);
-  } else {
-    return NextResponse.json({ error: 'Invalid ping type' }, { status: 400 });
-  }
-}
-
-async function localPing(url) {
   const startTime = Date.now();
   try {
-    const response = await fetch(`https://${url}`);
+    const response = await fetchWithTimeout(`https://${url}`);
     const endTime = Date.now();
+    const latency = endTime - startTime;
+    
+    // 检查是否真的超时了
+    if (latency >= 10000) {
+      throw new Error('Request timed out');
+    }
+    
     return NextResponse.json({
       url,
       status: response.status,
-      latency: endTime - startTime
+      latency: latency
     });
   } catch (error) {
     return NextResponse.json({
       url,
       error: error.message
-    });
-  }
-}
-
-async function serverPing(url) {
-  try {
-    console.log(`Attempting to ping ${url} from server`);
-    const { stdout, stderr } = await execPromise(`ping -c 4 ${url}`);
-    console.log(`Ping stdout: ${stdout}`);
-    console.log(`Ping stderr: ${stderr}`);
-
-    const avgMatch = stdout.match(/rtt min\/avg\/max\/mdev = [\d.]+\/([\d.]+)\/[\d.]+\/[\d.]+ ms/);
-    if (avgMatch) {
-      const avgLatency = parseFloat(avgMatch[1]);
-      return NextResponse.json({
-        url,
-        status: 'OK',
-        latency: avgLatency
-      });
-    } else {
-      console.error(`Failed to parse ping output for ${url}`);
-      return NextResponse.json({
-        url,
-        status: 'Error',
-        error: 'Failed to parse ping output'
-      });
-    }
-  } catch (error) {
-    console.error(`Error pinging ${url} from server:`, error);
-    return NextResponse.json({
-      url,
-      status: 'Error',
-      error: error.message
-    });
+    }, { status: 504 }); // 使用 504 Gateway Timeout 状态码
   }
 }
 
 async function getLocation() {
-  // 这里需要实现获取GPS位置的逻辑
-  // 由于浏览器限制，这部分可能需要在客户端实现
   return NextResponse.json({ error: 'Location service not implemented' }, { status: 501 });
 }

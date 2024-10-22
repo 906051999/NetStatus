@@ -13,8 +13,8 @@ const geistMono = localFont({
 });
 
 export const metadata = {
-  title: "NetStatus - 网络状态监测工具",
-  description: "提供基础而全面的网络状态信息",
+  title: "NetStatus | 设备与网络检测",
+  description: "设备与网络信息检测",
 };
 
 export default function RootLayout({ children }) {
@@ -25,7 +25,7 @@ export default function RootLayout({ children }) {
       >
         <div className="min-h-screen flex flex-col">
           <header className="bg-blue-600 text-white p-4">
-            <h1 className="text-2xl font-bold">NetStatus</h1>
+            <h1 className="text-2xl font-bold">NetStatus | 设备与网络检测</h1>
           </header>
           <main className="flex-grow container mx-auto p-4">
             {children}

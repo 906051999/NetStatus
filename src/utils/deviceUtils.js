@@ -1,84 +1,128 @@
+import FingerprintJS from '@fingerprintjs/fingerprintjs';
+import UAParser from 'ua-parser-js';
+
+const fpPromise = FingerprintJS.load();
+const parser = new UAParser();
+
 export async function getDeviceInfo() {
-  const userAgent = navigator.userAgent;
-  const platform = navigator.platform;
+  const fp = await fpPromise;
+  const result = await fp.get();
+  const uaResult = parser.getResult();
 
   const deviceInfo = {
-    type: getDeviceType(userAgent, platform),
-    model: getDeviceModel(userAgent),
-    resolution: `${window.screen.width} x ${window.screen.height}`,
+    fingerprint: result.visitorId,
+    type: getDeviceType(uaResult),
+    os: `${uaResult.os.name} ${uaResult.os.version}`,
+    browser: `${uaResult.browser.name} ${uaResult.browser.version}`,
+    model: uaResult.device.model || '未知',
+    vendor: uaResult.device.vendor || '未知',
+    ...getScreenInfo(),
     battery: await getBatteryInfo(),
+    networkType: await getNetworkType(),
+    orientation: getOrientation(),
     sensors: await getSensorData(),
+    components: result.components,
   };
 
   return deviceInfo;
 }
 
-function getDeviceType(userAgent, platform) {
-  if (/mobile/i.test(userAgent)) return 'Smartphone';
-  if (/tablet/i.test(userAgent)) return 'Tablet';
-  if (/win/i.test(platform)) return 'Desktop (Windows)';
-  if (/mac/i.test(platform)) return 'Desktop (Mac)';
-  if (/linux/i.test(platform)) return 'Desktop (Linux)';
-  return 'Unknown';
+function getDeviceType(uaResult) {
+  const deviceType = uaResult.device.type;
+  if (deviceType === 'mobile') return '智能手机';
+  if (deviceType === 'tablet') return '平板';
+  if (deviceType === 'desktop') return '桌面设备';
+  return '未知';
 }
 
-function getDeviceModel(userAgent) {
-  const matches = userAgent.match(/\(([^)]+)\)/);
-  return matches ? matches[1] : 'Unknown';
+function getScreenInfo() {
+  const logicalWidth = window.screen.width;
+  const logicalHeight = window.screen.height;
+  const dpr = window.devicePixelRatio || 1;
+
+  const physicalWidth = Math.round(logicalWidth * dpr);
+  const physicalHeight = Math.round(logicalHeight * dpr);
+
+  return {
+    logicalResolution: `${logicalWidth} x ${logicalHeight}`,
+    physicalResolution: `${physicalWidth} x ${physicalHeight}`,
+    devicePixelRatio: dpr
+  };
 }
 
 async function getBatteryInfo() {
   if ('getBattery' in navigator) {
     try {
       const battery = await navigator.getBattery();
-      return `${(battery.level * 100).toFixed(2)}%, ${battery.charging ? 'charging' : 'not charging'}`;
+      return `${(battery.level * 100).toFixed(0)}%, ${battery.charging ? '充电中' : '未充电'}`;
     } catch (error) {
-      console.error('Error getting battery info:', error);
-      return 'Not available';
+      console.error('获取电池信息失败:', error);
+      return '不可用';
     }
   }
-  return 'Not available';
+  return '不可用';
+}
+
+async function getNetworkType() {
+  if ('connection' in navigator && navigator.connection) {
+    const connection = navigator.connection;
+    if (connection.type) {
+      return connection.type;
+    } else if (connection.effectiveType) {
+      const types = {
+        'slow-2g': '2G',
+        '2g': '2G',
+        '3g': '3G',
+        '4g': '4G',
+      };
+      return types[connection.effectiveType] || connection.effectiveType;
+    }
+  }
+  return '未知';
+}
+
+function getOrientation() {
+  if ('orientation' in screen) {
+    switch (screen.orientation.type) {
+      case 'portrait-primary':
+      case 'portrait-secondary':
+        return '竖屏';
+      case 'landscape-primary':
+      case 'landscape-secondary':
+        return '横屏';
+      default:
+        return screen.orientation.type;
+    }
+  }
+  return '不可用';
 }
 
 async function getSensorData() {
-  const sensors = {
-    accelerometer: { x: 0, y: 0, z: 0 },
-    gyroscope: { alpha: 0, beta: 0, gamma: 0 },
-  };
+  return new Promise((resolve) => {
+    const sensors = {};
 
-  if ('DeviceMotionEvent' in window && typeof DeviceMotionEvent.requestPermission === 'function') {
-    try {
-      const permission = await DeviceMotionEvent.requestPermission();
-      if (permission === 'granted') {
-        window.addEventListener('devicemotion', (event) => {
-          sensors.accelerometer = {
-            x: event.acceleration.x,
-            y: event.acceleration.y,
-            z: event.acceleration.z,
-          };
-        });
-      }
-    } catch (error) {
-      console.error('Error requesting device motion permission:', error);
+    if ('DeviceMotionEvent' in window) {
+      window.addEventListener('devicemotion', (event) => {
+        sensors.accelerometer = {
+          x: event.acceleration.x || 0,
+          y: event.acceleration.y || 0,
+          z: event.acceleration.z || 0,
+        };
+      }, { once: true });
     }
-  }
 
-  if ('DeviceOrientationEvent' in window && typeof DeviceOrientationEvent.requestPermission === 'function') {
-    try {
-      const permission = await DeviceOrientationEvent.requestPermission();
-      if (permission === 'granted') {
-        window.addEventListener('deviceorientation', (event) => {
-          sensors.gyroscope = {
-            alpha: event.alpha,
-            beta: event.beta,
-            gamma: event.gamma,
-          };
-        });
-      }
-    } catch (error) {
-      console.error('Error requesting device orientation permission:', error);
+    if ('DeviceOrientationEvent' in window) {
+      window.addEventListener('deviceorientation', (event) => {
+        sensors.gyroscope = {
+          alpha: event.alpha || 0,
+          beta: event.beta || 0,
+          gamma: event.gamma || 0,
+        };
+      }, { once: true });
     }
-  }
 
-  return sensors;
+    setTimeout(() => {
+      resolve(sensors);
+    }, 1000);
+  });
 }
